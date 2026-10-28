@@ -151,18 +151,17 @@ pub fn isolation_bar(app: &mut VectorcraftApp, ui: &mut Ui, area: egui::Rect) {
     if let Some(st) = app.session.active()
         && let Some(iso) = st.isolation
     {
-        let mut crumbs: Vec<(&str, String)> = st
+        let mut crumbs: Vec<(Option<NodeId>, &str, String)> = st
             .doc
             .ancestry(iso)
             .unwrap_or_default()
             .iter()
-            .filter_map(|id| st.doc.node(*id))
-            .map(|n| (isolation_icon(&n.kind), n.display_name()))
+            .filter_map(|id| st.doc.node(*id).map(|n| (Some(*id), isolation_icon(&n.kind), n.display_name())))
             .collect();
         // Pattern editing mode: the pattern's name, and Save a Copy / Done / Cancel at the right.
         let pattern_edit = st.doc.pattern_edit.as_ref().map(|e| e.pattern.clone());
         if let Some(pn) = &pattern_edit {
-            crumbs.push(("shapes", pn.clone()));
+            crumbs.push((None, "shapes", pn.clone()));
         }
         let bar = egui::Rect::from_min_size(area.min, vec2(area.width(), 24.0));
         ui.interact(bar, ui.scope_id().with("iso-bar"), Sense::click_and_drag());
@@ -171,17 +170,43 @@ pub fn isolation_bar(app: &mut VectorcraftApp, ui: &mut Ui, area: egui::Rect) {
         let bresp = ui.interact(back, ui.scope_id().with("iso-back"), Sense::click());
         icons::paint(ui, "chevron-left", back, if bresp.hovered() { t.text } else { t.icon });
         // #4467: each crumb shows its kind's icon ahead of its label.
+        // #4468: ancestor crumbs are clickable to navigate to that level.
         let mut x = bar.left() + 30.0;
         let y = bar.center().y;
         let font = egui::FontId::proportional(12.0);
         let last = crumbs.len().saturating_sub(1);
-        for (i, (icon, label)) in crumbs.iter().enumerate() {
+        let mut nav_isolate: Option<NodeId> = None;
+        let mut nav_exit = false;
+        for (i, (oid, icon, label)) in crumbs.iter().enumerate() {
+            let tw = ui.painter().layout_no_wrap(label.clone(), font.clone(), t.text).size().x;
+            let w = 14.0 + 4.0 + tw;
+            let hit = egui::Rect::from_min_size(egui::pos2(x, y - 9.0), vec2(w, 18.0));
+            // The deepest crumb is where isolation already is, and the pattern name
+            // is not a node: neither navigates.
+            let clickable = oid.is_some() && i != last;
+            let hovered = if clickable {
+                let r = ui.interact(hit, ui.scope_id().with(("iso-crumb", i)), Sense::click());
+                if r.clicked() {
+                    if i == 0 {
+                        // The root layer exits isolation mode.
+                        nav_exit = true;
+                    } else if let Some(id) = oid {
+                        nav_isolate = Some(*id);
+                    }
+                }
+                r.hovered()
+            } else {
+                false
+            };
+            if hovered {
+                ui.painter().rect_filled(hit, 3.0, t.hover);
+            }
             let r = egui::Rect::from_min_size(egui::pos2(x, y - 7.0), vec2(14.0, 14.0));
             icons::paint(ui, icon, r, t.icon);
             x += 18.0;
-            let w = ui.painter().layout_no_wrap(label.clone(), font.clone(), t.text).size().x;
-            ui.painter().text(egui::pos2(x, y), egui::Align2::LEFT_CENTER, label.clone(), font.clone(), t.text);
-            x += w + 6.0;
+            let color = if hovered { t.accent } else { t.text };
+            ui.painter().text(egui::pos2(x, y), egui::Align2::LEFT_CENTER, label.clone(), font.clone(), color);
+            x += tw + 6.0;
             if i != last {
                 let sep = "›";
                 let sw = ui.painter().layout_no_wrap(sep.to_owned(), font.clone(), t.text_dim).size().x;
@@ -209,11 +234,26 @@ pub fn isolation_bar(app: &mut VectorcraftApp, ui: &mut Ui, area: egui::Rect) {
         if bresp.clicked() {
             pattern_cmd = pattern_cmd.or(pattern_edit.as_ref().map(|_| "object.pattern.done"));
             if pattern_cmd.is_none() {
-                app.run("object.exitIsolation", json!({})).ok();
+                // #4468: step up one level instead of leaving isolation entirely.
+                // The parent is the second-to-last crumb; stepping up from a
+                // top-level group lands on the root layer, which exits isolation.
+                if crumbs.len() >= 2 {
+                    match &crumbs[crumbs.len() - 2] {
+                        (Some(pid), _, _) if crumbs.len() > 2 => nav_isolate = Some(*pid),
+                        _ => nav_exit = true,
+                    }
+                } else {
+                    nav_exit = true;
+                }
             }
         }
         if let Some(cmd) = pattern_cmd {
             app.run(cmd, json!({})).ok();
+        }
+        if let Some(pid) = nav_isolate {
+            app.run("object.isolate", json!({ "id": pid.0 })).ok();
+        } else if nav_exit {
+            app.run("object.exitIsolation", json!({})).ok();
         }
     }
 }
