@@ -129,6 +129,21 @@ pub fn doc_tabs(app: &mut VectorcraftApp, ui: &mut Ui) {
     }
 }
 
+/// The icon for an isolation breadcrumb by node kind (#4467).
+fn isolation_icon(kind: &NodeKind) -> &'static str {
+    match kind {
+        NodeKind::Layer { .. } => "layers",
+        NodeKind::Group { .. } => "group",
+        NodeKind::Path { .. } => "spline",
+        NodeKind::Compound { .. } => "shapes",
+        NodeKind::Text(_) => "type",
+        NodeKind::Image(_) => "image",
+        NodeKind::SymbolInstance { .. } => "dc-place-symbol",
+        NodeKind::Blend { .. } => "dc-blend",
+        _ => "shapes",
+    }
+}
+
 /// The isolation mode breadcrumb bar. It is drawn over the top of `area` (the canvas), after the
 /// canvas, so entering isolation mode does not change the canvas's size (#3126).
 pub fn isolation_bar(app: &mut VectorcraftApp, ui: &mut Ui, area: egui::Rect) {
@@ -136,12 +151,18 @@ pub fn isolation_bar(app: &mut VectorcraftApp, ui: &mut Ui, area: egui::Rect) {
     if let Some(st) = app.session.active()
         && let Some(iso) = st.isolation
     {
-        let mut crumbs: Vec<String> =
-            st.doc.ancestry(iso).unwrap_or_default().iter().filter_map(|id| st.doc.node(*id)).map(|n| n.display_name()).collect();
+        let mut crumbs: Vec<(&str, String)> = st
+            .doc
+            .ancestry(iso)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|id| st.doc.node(*id))
+            .map(|n| (isolation_icon(&n.kind), n.display_name()))
+            .collect();
         // Pattern editing mode: the pattern's name, and Save a Copy / Done / Cancel at the right.
         let pattern_edit = st.doc.pattern_edit.as_ref().map(|e| e.pattern.clone());
         if let Some(pn) = &pattern_edit {
-            crumbs.push(pn.clone());
+            crumbs.push(("shapes", pn.clone()));
         }
         let bar = egui::Rect::from_min_size(area.min, vec2(area.width(), 24.0));
         ui.interact(bar, ui.scope_id().with("iso-bar"), Sense::click_and_drag());
@@ -149,13 +170,25 @@ pub fn isolation_bar(app: &mut VectorcraftApp, ui: &mut Ui, area: egui::Rect) {
         let back = egui::Rect::from_min_size(bar.min + vec2(6.0, 3.0), vec2(18.0, 18.0));
         let bresp = ui.interact(back, ui.scope_id().with("iso-back"), Sense::click());
         icons::paint(ui, "chevron-left", back, if bresp.hovered() { t.text } else { t.icon });
-        ui.painter().text(
-            bar.left_center() + vec2(30.0, 0.0),
-            egui::Align2::LEFT_CENTER,
-            crumbs.join("  ›  "),
-            egui::FontId::proportional(12.0),
-            t.text,
-        );
+        // #4467: each crumb shows its kind's icon ahead of its label.
+        let mut x = bar.left() + 30.0;
+        let y = bar.center().y;
+        let font = egui::FontId::proportional(12.0);
+        let last = crumbs.len().saturating_sub(1);
+        for (i, (icon, label)) in crumbs.iter().enumerate() {
+            let r = egui::Rect::from_min_size(egui::pos2(x, y - 7.0), vec2(14.0, 14.0));
+            icons::paint(ui, icon, r, t.icon);
+            x += 18.0;
+            let w = ui.painter().layout_no_wrap(label.clone(), font.clone(), t.text).size().x;
+            ui.painter().text(egui::pos2(x, y), egui::Align2::LEFT_CENTER, label.clone(), font.clone(), t.text);
+            x += w + 6.0;
+            if i != last {
+                let sep = "›";
+                let sw = ui.painter().layout_no_wrap(sep.to_owned(), font.clone(), t.text_dim).size().x;
+                ui.painter().text(egui::pos2(x, y), egui::Align2::LEFT_CENTER, sep.to_owned(), font.clone(), t.text_dim);
+                x += sw + 6.0;
+            }
+        }
         let mut pattern_cmd = None;
         if pattern_edit.is_some() {
             let mut x = bar.right() - 6.0;
