@@ -890,6 +890,10 @@ impl DirectSelectionTool {
         if hit_test(cx.doc, p, cx.hit_options()).and_then(|h| cx.doc.node(h.leaf)).is_some_and(|n| matches!(n.kind, NodeKind::Text(_))) {
             return vec![Action::SwitchTool("type".into())];
         }
+        // A double-click outside the isolated artwork leaves isolation mode (#4466).
+        if hit_test(cx.doc, p, cx.hit_options()).is_none() && cx.isolation.is_some() {
+            return vec![Action::Exec("object.exitIsolation".into(), json!({}))];
+        }
         vec![]
     }
     fn press_anchor(&mut self, cx: &ToolContext, ev: &PointerEvent, p: Point, (id, si, ai, grab): (NodeId, usize, usize, Point)) -> Vec<Action> {

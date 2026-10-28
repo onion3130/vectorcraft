@@ -526,6 +526,19 @@ fn isolation_mode_leaves_art_outside_the_isolated_group() {
     assert!(a.is_empty(), "does not add the group outside isolation ({outer:?}): {a:?}");
 }
 
+/// #4466: a double-click on empty canvas with Direct Selection leaves isolation mode,
+/// like the Selection tool does; without isolation it stays empty.
+#[test]
+fn double_click_on_empty_canvas_leaves_isolation_mode() {
+    let (d, _, _, inner, _) = nested_group_doc();
+    let (s, p) = (Selection::default(), paint());
+    let exit = vec![Action::Exec("object.exitIsolation".into(), json!({}))];
+    let isolated = ToolContext { isolation: Some(inner), ..cx(&d, &s, &p) };
+    let dbl = |c: &ToolContext| DirectSelectionTool::new(false).pointer(c, &PointerEvent::new(PointerKind::DoubleClick, 450.0, 30.0));
+    assert_eq!(dbl(&isolated), exit);
+    assert!(dbl(&cx(&d, &s, &p)).is_empty(), "no isolation: nothing to leave");
+}
+
 /// #927: a marquee across type selects the type object whole, beside the anchors it holds.
 #[test]
 fn marquee_selects_type_it_touches() {
