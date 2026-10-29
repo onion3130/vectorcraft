@@ -1,4 +1,6 @@
-use super::{Sense, Stroke, Tokens, Ui, VectorcraftApp, icons, json, theme, vec2, widgets, zoom_label};
+use vectorcraft_doc::NodeId;
+
+use super::{NodeKind, Sense, Stroke, Tokens, Ui, VectorcraftApp, icons, json, theme, vec2, widgets, zoom_label};
 
 /// A document tab's title: "Name* @ 66.67 % (RGB/Preview)", or while an opacity mask is edited
 /// "Name* @ 66.67 % (<Opacity Mask>/Opacity Mask)".
@@ -177,13 +179,38 @@ pub fn isolation_bar(app: &mut VectorcraftApp, ui: &mut Ui, area: egui::Rect) {
         let last = crumbs.len().saturating_sub(1);
         let mut nav_isolate: Option<NodeId> = None;
         let mut nav_exit = false;
+        // Reserve the exact same rectangles for drawing and clipping, so long
+        // pattern names cannot cover Done, Cancel or Save a Copy.
+        let mut command_x = bar.right() - 6.0;
+        let pattern_buttons: Vec<_> = if pattern_edit.is_some() {
+            [("Cancel", "object.pattern.cancel"), ("Done", "object.pattern.done"), ("Save a Copy", "object.pattern.saveCopy")]
+                .into_iter()
+                .map(|(label, cmd)| {
+                    let label = tl!(label);
+                    let width = ui.painter().layout_no_wrap(label.to_owned(), font.clone(), t.text).size().x + 12.0;
+                    let rect = egui::Rect::from_min_max(egui::pos2(command_x - width, bar.top() + 3.0), egui::pos2(command_x, bar.bottom() - 3.0));
+                    command_x -= width + 6.0;
+                    (label, cmd, rect)
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let crumb_right = if pattern_edit.is_some() { command_x } else { bar.right() - 6.0 };
+        let crumb_clip = egui::Rect::from_min_max(egui::pos2(x, bar.top()), egui::pos2(crumb_right.max(x), bar.bottom()));
+        let mut crumb_ui = ui.new_child(egui::UiBuilder::new().max_rect(crumb_clip));
+        crumb_ui.set_clip_rect(crumb_clip.intersect(ui.clip_rect()));
+        let crumb_painter = crumb_ui.painter();
         for (i, (oid, icon, label)) in crumbs.iter().enumerate() {
             let tw = ui.painter().layout_no_wrap(label.clone(), font.clone(), t.text).size().x;
             let w = 14.0 + 4.0 + tw;
-            let hit = egui::Rect::from_min_size(egui::pos2(x, y - 9.0), vec2(w, 18.0));
+            let hit = egui::Rect::from_min_size(egui::pos2(x, y - 9.0), vec2(w, 18.0)).intersect(crumb_clip);
             // The deepest crumb is where isolation already is, and the pattern name
             // is not a node: neither navigates.
-            let clickable = oid.is_some() && i != last;
+            let clickable = pattern_edit.is_none()
+                && i != last
+                && hit.is_positive()
+                && oid.and_then(|id| st.doc.node(id)).is_some_and(|n| n.extras().shaper.is_none());
             let hovered = if clickable {
                 let r = ui.interact(hit, ui.scope_id().with(("iso-crumb", i)), Sense::click());
                 if r.clicked() {
@@ -199,61 +226,56 @@ pub fn isolation_bar(app: &mut VectorcraftApp, ui: &mut Ui, area: egui::Rect) {
                 false
             };
             if hovered {
-                ui.painter().rect_filled(hit, 3.0, t.hover);
+                crumb_painter.rect_filled(hit, 3.0, t.hover);
             }
             let r = egui::Rect::from_min_size(egui::pos2(x, y - 7.0), vec2(14.0, 14.0));
-            icons::paint(ui, icon, r, t.icon);
+            icons::paint(&crumb_ui, icon, r, t.icon);
             x += 18.0;
             let color = if hovered { t.accent } else { t.text };
-            ui.painter().text(egui::pos2(x, y), egui::Align2::LEFT_CENTER, label.clone(), font.clone(), color);
+            crumb_painter.text(egui::pos2(x, y), egui::Align2::LEFT_CENTER, label.clone(), font.clone(), color);
             x += tw + 6.0;
             if i != last {
                 let sep = "›";
                 let sw = ui.painter().layout_no_wrap(sep.to_owned(), font.clone(), t.text_dim).size().x;
-                ui.painter().text(egui::pos2(x, y), egui::Align2::LEFT_CENTER, sep.to_owned(), font.clone(), t.text_dim);
+                crumb_painter.text(egui::pos2(x, y), egui::Align2::LEFT_CENTER, sep.to_owned(), font.clone(), t.text_dim);
                 x += sw + 6.0;
             }
         }
         let mut pattern_cmd = None;
-        if pattern_edit.is_some() {
-            let mut x = bar.right() - 6.0;
-            for (label, cmd) in [("Cancel", "object.pattern.cancel"), ("Done", "object.pattern.done"), ("Save a Copy", "object.pattern.saveCopy")] {
-                let label = tl!(label);
-                let w = 12.0 + 7.0 * label.len() as f32;
-                let r = egui::Rect::from_min_max(egui::pos2(x - w, bar.top() + 3.0), egui::pos2(x, bar.bottom() - 3.0));
-                let resp = ui.interact(r, ui.scope_id().with(("pat-bar", cmd)), Sense::click());
-                ui.painter().rect_filled(r, 3.0, if resp.hovered() { t.hover } else { t.panel });
-                ui.painter().rect_stroke(r, 3.0, Stroke::new(1.0, t.button_border), egui::StrokeKind::Inside);
-                ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, label, egui::FontId::proportional(12.0), t.text);
-                if resp.clicked() {
-                    pattern_cmd = Some(cmd);
-                }
-                x -= w + 6.0;
+        for (label, cmd, r) in pattern_buttons {
+            let resp = ui.interact(r, ui.scope_id().with(("pat-bar", cmd)), Sense::click());
+            ui.painter().rect_filled(r, 3.0, if resp.hovered() { t.hover } else { t.panel });
+            ui.painter().rect_stroke(r, 3.0, Stroke::new(1.0, t.button_border), egui::StrokeKind::Inside);
+            ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, label, font.clone(), t.text);
+            if resp.clicked() {
+                pattern_cmd = Some(cmd);
             }
         }
         if bresp.clicked() {
             pattern_cmd = pattern_cmd.or(pattern_edit.as_ref().map(|_| "object.pattern.done"));
             if pattern_cmd.is_none() {
-                // #4468: step up one level instead of leaving isolation entirely.
-                // The parent is the second-to-last crumb; stepping up from a
-                // top-level group lands on the root layer, which exits isolation.
-                if crumbs.len() >= 2 {
-                    match &crumbs[crumbs.len() - 2] {
-                        (Some(pid), _, _) if crumbs.len() > 2 => nav_isolate = Some(*pid),
-                        _ => nav_exit = true,
-                    }
-                } else {
-                    nav_exit = true;
+                // Isolating a Shaper wrapper redirects back to its source group.
+                // Skip wrappers when moving up, or Back would stay at the same level.
+                let parent = crumbs
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .skip(1)
+                    .find(|(_, (id, _, _))| id.and_then(|id| st.doc.node(id)).is_some_and(|n| n.extras().shaper.is_none()));
+                match parent {
+                    Some((i, (Some(pid), _, _))) if i > 0 => nav_isolate = Some(*pid),
+                    _ => nav_exit = true,
                 }
             }
         }
-        if let Some(cmd) = pattern_cmd {
-            app.run(cmd, json!({})).ok();
-        }
-        if let Some(pid) = nav_isolate {
-            app.run("object.isolate", json!({ "id": pid.0 })).ok();
-        } else if nav_exit {
-            app.run("object.exitIsolation", json!({})).ok();
+        let action = pattern_cmd
+            .map(|cmd| (cmd, json!({})))
+            .or_else(|| nav_isolate.map(|pid| ("object.isolate", json!({ "id": pid.0 }))))
+            .or_else(|| nav_exit.then(|| ("object.exitIsolation", json!({}))));
+        if let Some((cmd, params)) = action
+            && let Err(error) = app.run(cmd, params)
+        {
+            app.status(error.to_string());
         }
     }
 }

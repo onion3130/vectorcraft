@@ -887,11 +887,12 @@ impl DirectSelectionTool {
             return vec![];
         }
         // A double-click edits what is drawn: not a clipping path's outline.
-        if hit_test(cx.doc, p, cx.hit_options()).and_then(|h| cx.doc.node(h.leaf)).is_some_and(|n| matches!(n.kind, NodeKind::Text(_))) {
-            return vec![Action::SwitchTool("type".into())];
-        }
-        // A double-click outside the isolated artwork leaves isolation mode (#4466).
-        if hit_test(cx.doc, p, cx.hit_options()).is_none() && cx.isolation.is_some() {
+        if let Some(hit) = hit_test(cx.doc, p, cx.hit_options()) {
+            if cx.doc.node(hit.leaf).is_some_and(|n| matches!(n.kind, NodeKind::Text(_))) {
+                return vec![Action::SwitchTool("type".into())];
+            }
+        } else if cx.isolation.is_some() {
+            // An empty double-click leaves isolation with either selection tool (#4466).
             return vec![Action::Exec("object.exitIsolation".into(), json!({}))];
         }
         vec![]

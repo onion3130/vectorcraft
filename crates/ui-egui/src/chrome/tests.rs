@@ -902,6 +902,125 @@ fn the_isolation_bar_does_not_take_layout_height_from_the_canvas() {
     assert_eq!(top(&mut app), before, "isolation mode leaves the canvas where it was");
 }
 
+/// A headless isolation bar frame; return the scope so tests can address the
+/// same widgets a user clicks, without depending on text width estimates.
+fn isolation_bar_frame(app: &mut crate::VectorcraftApp, ctx: &egui::Context, events: Vec<egui::Event>) -> (egui::Id, egui::FullOutput) {
+    let area = egui::Rect::from_min_size(egui::pos2(0.0, 40.0), egui::vec2(600.0, 200.0));
+    let mut scope = egui::Id::NULL;
+    let mut out = ctx.run_ui(egui::RawInput { screen_rect: Some(area.expand(40.0)), events, ..Default::default() }, |ui| {
+        scope = ui.scope_id();
+        super::isolation_bar(app, ui, area);
+    });
+    out.textures_delta.clear();
+    (scope, out)
+}
+
+fn isolation_bar_click(app: &mut crate::VectorcraftApp, ctx: &egui::Context, id: egui::Id) {
+    let pos = ctx.viewport(|vp| vp.prev_pass.widgets.get(id).expect("the navigation widget exists").rect.center());
+    isolation_bar_click_at(app, ctx, pos);
+}
+
+fn isolation_bar_click_at(app: &mut crate::VectorcraftApp, ctx: &egui::Context, pos: egui::Pos2) {
+    let button = |pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    for event in [egui::Event::PointerMoved(pos), button(true), button(false)] {
+        isolation_bar_frame(app, ctx, vec![event]);
+    }
+}
+
+#[test]
+fn isolation_bar_ancestors_and_back_navigate_nested_groups() {
+    let mut app = crate::VectorcraftApp::new(Session::new(), Default::default());
+    app.run("file.new", json!({"width": 400, "height": 200})).unwrap();
+    let shape = app.run("shape.rectangle", json!({"x": 10, "y": 10, "width": 30, "height": 20})).unwrap()["id"].as_u64().unwrap();
+    let group = |app: &mut crate::VectorcraftApp| {
+        app.run("object.group", json!({})).unwrap();
+        app.session.active().unwrap().selection.objects[0]
+    };
+    app.run("select.set", json!({"ids": [shape]})).unwrap();
+    let inner = group(&mut app);
+    let outer = group(&mut app);
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts(&ctx);
+    app.run("object.isolate", json!({"id": shape})).unwrap();
+    let (scope, _) = isolation_bar_frame(&mut app, &ctx, vec![]);
+    let back = scope.with("iso-back");
+    isolation_bar_click(&mut app, &ctx, back);
+    assert_eq!(app.session.active().unwrap().isolation, Some(inner));
+    isolation_bar_click(&mut app, &ctx, back);
+    assert_eq!(app.session.active().unwrap().isolation, Some(outer));
+    app.run("object.isolate", json!({"id": shape})).unwrap();
+    isolation_bar_frame(&mut app, &ctx, vec![]);
+    isolation_bar_click(&mut app, &ctx, scope.with(("iso-crumb", 1usize)));
+    assert_eq!(app.session.active().unwrap().isolation, Some(outer));
+    isolation_bar_click(&mut app, &ctx, scope.with(("iso-crumb", 0usize)));
+    assert!(app.session.active().unwrap().isolation.is_none());
+}
+
+#[test]
+fn isolation_bar_back_skips_shaper_wrappers() {
+    use vectorcraft_doc::{Document, Node, NodeId};
+    let mut app = crate::VectorcraftApp::new(Session::new(), Default::default());
+    app.run("file.new", json!({"width": 400, "height": 200})).unwrap();
+    let (parent, wrapper, source) = (NodeId(101), NodeId(102), NodeId(103));
+    let source_node = Node::group(source, vec![]);
+    let mut shaper = Node::group(wrapper, vec![Arc::new(source_node)]);
+    shaper.extras_mut().shaper = Some(Box::default());
+    let outer = Node::group(parent, vec![Arc::new(shaper.clone())]);
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts(&ctx);
+    for nested in [true, false] {
+        let st = app.session.active_mut().unwrap();
+        let mut doc = Document::new(400.0, 200.0);
+        let layer = doc.layers[0].id;
+        doc.insert(Some(layer), 0, if nested { outer.clone() } else { shaper.clone() }).unwrap();
+        st.doc = Arc::new(doc);
+        app.run("object.isolate", json!({"id": wrapper.0})).unwrap();
+        assert_eq!(app.session.active().unwrap().isolation, Some(source));
+        let (scope, _) = isolation_bar_frame(&mut app, &ctx, vec![]);
+        let wrapper_index = if nested { 2usize } else { 1usize };
+        assert!(ctx.viewport(|vp| vp.prev_pass.widgets.get(scope.with(("iso-crumb", wrapper_index))).is_none()));
+        isolation_bar_click(&mut app, &ctx, scope.with("iso-back"));
+        assert_eq!(app.session.active().unwrap().isolation, nested.then_some(parent));
+    }
+}
+
+#[test]
+fn isolation_bar_pattern_editing_keeps_navigation_and_commands_safe() {
+    let mut app = crate::VectorcraftApp::new(Session::new(), Default::default());
+    app.run("file.new", json!({"width": 400, "height": 200})).unwrap();
+    let id = app.run("shape.rectangle", json!({"x": 10, "y": 10, "width": 30, "height": 20})).unwrap()["id"].clone();
+    app.run("select.set", json!({"ids": [id]})).unwrap();
+    let name = "Long pattern name ".repeat(12);
+    app.run("object.pattern.make", json!({"name": name, "width": 40, "height": 40})).unwrap();
+    let isolated = app.session.active().unwrap().isolation;
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts(&ctx);
+    let (scope, out) = isolation_bar_frame(&mut app, &ctx, vec![]);
+    assert!(ctx.viewport(|vp| vp.prev_pass.widgets.get(scope.with(("iso-crumb", 0usize))).is_none()));
+    let (left, right) = ctx.viewport(|vp| {
+        let commands: Vec<_> = ["object.pattern.cancel", "object.pattern.done", "object.pattern.saveCopy"]
+            .iter()
+            .map(|cmd| vp.prev_pass.widgets.get(scope.with(("pat-bar", *cmd))).unwrap().rect)
+            .collect();
+        (commands.iter().map(|r| r.left()).fold(f32::INFINITY, f32::min), commands[0].right())
+    });
+    for shape in &out.shapes {
+        if let egui::Shape::Text(text) = &shape.shape
+            && text.galley.text() == name
+        {
+            assert!(shape.clip_rect.right() < left, "long pattern names are clipped before the buttons");
+        }
+    }
+    assert!(right <= 600.0);
+    isolation_bar_click_at(&mut app, &ctx, egui::pos2(50.0, 52.0));
+    let st = app.session.active().unwrap();
+    assert_eq!(st.isolation, isolated, "clicking the temporary layer cannot leave pattern editing");
+    assert!(st.doc.pattern_edit.is_some());
+    isolation_bar_click(&mut app, &ctx, scope.with(("pat-bar", "object.pattern.done")));
+    let st = app.session.active().unwrap();
+    assert!(st.isolation.is_none() && st.doc.pattern_edit.is_none(), "Done completes pattern editing");
+}
+
 /// The Control bar's Isolate Selected Object isolates a path inside a group that Direct
 /// Selection selected, and Exit Isolation Mode leaves with the path selected. Type, symbol
 /// instances, blends, two objects and an envelope's contents get no isolate button, and pattern
