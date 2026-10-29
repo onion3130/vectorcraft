@@ -181,7 +181,15 @@ fn text_edit_limited_name(ui: &mut egui::Ui, d: &mut Dialog, key: &str, width: f
         .inner_margin(egui::Margin::symmetric(6, 3))
         .show(ui, |ui| {
             crate::theme::strong_selected_text(ui);
-            ui.add(egui::TextEdit::singleline(&mut s).id(id).frame(egui::Frame::NONE).desired_width(width).char_limit(max_chars))
+            ui.add(
+                egui::TextEdit::singleline(&mut s)
+                    .id(id)
+                    .frame(egui::Frame::NONE)
+                    .desired_width(width)
+                    .char_limit(max_chars)
+                    // Centred in the field's box like the other single-line inputs (#4567).
+                    .vertical_align(egui::Align::Center),
+            )
         });
     if r.inner.changed() {
         d.fields.insert(key.into(), Value::String(s));

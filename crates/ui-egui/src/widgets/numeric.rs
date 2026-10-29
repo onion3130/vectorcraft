@@ -630,6 +630,7 @@ pub fn opt_field_named(ui: &mut Ui, id: impl std::hash::Hash, name: Option<&str>
                     .frame(egui::Frame::NONE)
                     .desired_width(width - 10.0)
                     .font(egui::FontId::proportional(12.5))
+                    .vertical_align(egui::Align::Center)
                     .text_color(if enabled { t.text_strong } else { t.text_disabled }),
             )
         });

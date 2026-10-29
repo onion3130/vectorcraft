@@ -420,6 +420,7 @@ pub fn hex_field_named(ui: &mut Ui, id: impl std::hash::Hash, name: Option<&str>
                     .desired_width(62.0)
                     .char_limit(7)
                     .font(egui::FontId::proportional(12.5))
+                    .vertical_align(egui::Align::Center)
                     .text_color(t.text_strong),
             )
         })

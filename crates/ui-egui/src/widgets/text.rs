@@ -207,6 +207,9 @@ pub(super) fn recessed_text(
                 .show(ui, |ui| {
                     crate::theme::strong_selected_text(ui);
                     let edit = if rows > 1 { egui::TextEdit::multiline(&mut buf).desired_rows(rows) } else { egui::TextEdit::singleline(&mut buf) };
+                    // Single-line text sits vertically centred in its 26-point box (#4567):
+                    // egui 0.37 pins the galley to the top of the inner rect by default.
+                    let edit = if rows > 1 { edit } else { edit.vertical_align(egui::Align::Center) };
                     ui.add(
                         edit.id(id)
                             .frame(egui::Frame::NONE)
