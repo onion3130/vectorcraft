@@ -891,8 +891,10 @@ impl DirectSelectionTool {
             if cx.doc.node(hit.leaf).is_some_and(|n| matches!(n.kind, NodeKind::Text(_))) {
                 return vec![Action::SwitchTool("type".into())];
             }
-        } else if cx.isolation.is_some() {
+        } else if cx.isolation.is_some() && cx.doc.pattern_edit.is_none() {
             // An empty double-click leaves isolation with either selection tool (#4466).
+            // While pattern editing is active isolation backs the pattern layer, so
+            // leaving it would strand pattern_edit with no isolation to edit in.
             return vec![Action::Exec("object.exitIsolation".into(), json!({}))];
         }
         vec![]

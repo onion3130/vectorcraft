@@ -537,6 +537,12 @@ fn double_click_on_empty_canvas_leaves_isolation_mode() {
     let dbl = |c: &ToolContext| DirectSelectionTool::new(false).pointer(c, &PointerEvent::new(PointerKind::DoubleClick, 450.0, 30.0));
     assert_eq!(dbl(&isolated), exit);
     assert!(dbl(&cx(&d, &s, &p)).is_empty(), "no isolation: nothing to leave");
+    // While pattern editing is active the empty double-click must not strand
+    // pattern_edit with no isolation to edit in.
+    let mut pe = d.clone();
+    pe.pattern_edit = Some(vectorcraft_doc::PatternEdit { pattern: "p".into(), layer: inner, original: None });
+    let guarded = ToolContext { isolation: Some(inner), ..cx(&pe, &s, &p) };
+    assert!(dbl(&guarded).is_empty(), "pattern editing: stay isolated");
 }
 
 /// #927: a marquee across type selects the type object whole, beside the anchors it holds.
