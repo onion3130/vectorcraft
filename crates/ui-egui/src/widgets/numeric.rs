@@ -460,7 +460,7 @@ pub fn spin_field_auto_named(
     presets: &[f64],
 ) -> Option<SpinPick> {
     let label = take_previous_label(ui);
-    spin_generic(ui, label, value, auto, width, step, min, presets, &|v| unit.format(v), &mut |ui, fw, label| {
+    spin_generic(ui, label, value, auto, width, step, min, presets, Some(unit), &|v| unit.format(v), &mut |ui, fw, label| {
         unit_field(ui, id, label, name, value, unit, fw, false, min..=f64::INFINITY)
     })
 }
@@ -499,7 +499,7 @@ pub fn spin_plain_named(
     let label = take_previous_label(ui);
     let value = value.into();
     let fmt = |v: f64| format!("{v}{suffix}");
-    spin_generic(ui, label, value, None, width, step, min, presets, &fmt, &mut |ui, fw, label| {
+    spin_generic(ui, label, value, None, width, step, min, presets, None, &fmt, &mut |ui, fw, label| {
         bounded_field(ui, id, label, name, value, suffix, decimals, fw, &(min..=f64::INFINITY), None)
     })
     .and_then(SpinPick::value)
@@ -517,6 +517,7 @@ fn spin_generic(
     step: f64,
     min: f64,
     presets: &[f64],
+    unit: Option<Unit>,
     fmt: &dyn Fn(f64) -> String,
     field: &mut SpinField<'_>,
 ) -> Option<SpinPick> {
@@ -553,7 +554,23 @@ fn spin_generic(
             && let Some(v) = value
         {
             let modifiers = ui.input(|i| i.modifiers);
-            out = Some(SpinPick::Value(spinner_step(v, step, min, up.contains(p), modifiers)));
+            // Step in display units so the field keeps its shown precision: a step in
+            // points rounded to 3 places drops the 4th displayed decimal for large
+            // units (0.0078 in -> 10.008 instead of 10.0078). Convert back to points.
+            let stepped = match unit {
+                Some(u) => {
+                    let shown = u.from_pt(v);
+                    let step_shown = u.from_pt(step);
+                    let min_shown = u.from_pt(min);
+                    let decimals = match u {
+                        Unit::Points | Unit::Pixels | Unit::Picas => 3,
+                        _ => 4,
+                    };
+                    u.to_pt(spinner_step_with(decimals, shown, step_shown, min_shown, up.contains(p), modifiers))
+                }
+                None => spinner_step(v, step, min, up.contains(p), modifiers),
+            };
+            out = Some(SpinPick::Value(stepped));
         }
         let fw = if presets.is_empty() { width - 15.0 } else { width - 34.0 };
         if let Some(v) = field(ui, fw, label) {
@@ -586,15 +603,22 @@ fn spin_generic(
 /// (5.1 with step 1.0 goes up to 6.0, down to 5.0); a Shift step adds or takes ten
 /// and keeps the fraction.
 pub(super) fn spinner_step(value: f64, step: f64, min: f64, up: bool, modifiers: egui::Modifiers) -> f64 {
+    spinner_step_with(STEP_DECIMALS, value, step, min, up, modifiers)
+}
+
+/// [`spinner_step`] with an explicit rounding precision, so unit fields keep the decimals
+/// they display (4 for inch-like units, 3 for point-like ones). Callers pass values already
+/// in the unit they display.
+pub(super) fn spinner_step_with(decimals: i32, value: f64, step: f64, min: f64, up: bool, modifiers: egui::Modifiers) -> f64 {
     let found = STEPS.iter().find(|(m, _)| modifiers.matches_logically(*m));
     let is_shift = matches!(found, Some((m, _)) if *m == egui::Modifiers::SHIFT);
     if is_shift {
         let delta = step * 10.0;
-        return round_to((value + if up { delta } else { -delta }).max(min), STEP_DECIMALS).max(min);
+        return round_to((value + if up { delta } else { -delta }).max(min), decimals).max(min);
     }
     let size = if matches!(found, Some((m, _)) if *m == egui::Modifiers::COMMAND) { step * 0.1 } else { step };
     let n = if up { 1.0 } else { -1.0 };
-    round_to(step_to_multiple(value, size, n), STEP_DECIMALS).max(min)
+    round_to(step_to_multiple(value, size, n), decimals).max(min)
 }
 
 /// A number field that may be empty (Stroke dash/gap): `value` (points) shows in `unit` without

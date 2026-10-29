@@ -171,6 +171,18 @@ pub fn isolation_bar(app: &mut VectorcraftApp, ui: &mut Ui, area: egui::Rect) {
         icons::paint(ui, "chevron-left", back, if bresp.hovered() { t.text } else { t.icon });
         // #4467: each crumb shows its kind's icon ahead of its label.
         // #4468: ancestor crumbs are clickable to navigate to that level.
+        // While pattern editing the command buttons occupy the right side of the
+        // bar, so crumbs stop before them instead of painting underneath.
+        let reserved = if pattern_edit.is_some() {
+            let mut w = 0.0;
+            for (label, _) in [("Cancel", "object.pattern.cancel"), ("Done", "object.pattern.done"), ("Save a Copy", "object.pattern.saveCopy")] {
+                w += 12.0 + 7.0 * tl!(label).len() as f32 + 6.0;
+            }
+            w + 6.0
+        } else {
+            6.0
+        };
+        let crumb_right = bar.right() - reserved;
         let mut x = bar.left() + 30.0;
         let y = bar.center().y;
         let font = egui::FontId::proportional(12.0);
@@ -180,10 +192,14 @@ pub fn isolation_bar(app: &mut VectorcraftApp, ui: &mut Ui, area: egui::Rect) {
         for (i, (oid, icon, label)) in crumbs.iter().enumerate() {
             let tw = ui.painter().layout_no_wrap(label.clone(), font.clone(), t.text).size().x;
             let w = 14.0 + 4.0 + tw;
+            if x + w > crumb_right {
+                break;
+            }
             let hit = egui::Rect::from_min_size(egui::pos2(x, y - 9.0), vec2(w, 18.0));
             // The deepest crumb is where isolation already is, and the pattern name
-            // is not a node: neither navigates.
-            let clickable = oid.is_some() && i != last;
+            // is not a node: neither navigates. While pattern editing no ancestor
+            // navigates either, so crumbs cannot leave the pattern layer isolated.
+            let clickable = oid.is_some() && i != last && pattern_edit.is_none();
             let hovered = if clickable {
                 let r = ui.interact(hit, ui.scope_id().with(("iso-crumb", i)), Sense::click());
                 if r.clicked() {
@@ -235,15 +251,25 @@ pub fn isolation_bar(app: &mut VectorcraftApp, ui: &mut Ui, area: egui::Rect) {
             pattern_cmd = pattern_cmd.or(pattern_edit.as_ref().map(|_| "object.pattern.done"));
             if pattern_cmd.is_none() {
                 // #4468: step up one level instead of leaving isolation entirely.
-                // The parent is the second-to-last crumb; stepping up from a
-                // top-level group lands on the root layer, which exits isolation.
-                if crumbs.len() >= 2 {
-                    match &crumbs[crumbs.len() - 2] {
-                        (Some(pid), _, _) if crumbs.len() > 2 => nav_isolate = Some(*pid),
-                        _ => nav_exit = true,
+                // Skip Shaper wrapper groups so back never lands on a wrapper.
+                // Stepping up from a top-level group lands on the root layer,
+                // which exits isolation.
+                let mut target: Option<NodeId> = None;
+                for (oid, _, _) in crumbs.iter().rev().skip(1) {
+                    let Some(pid) = oid else { continue };
+                    if st.doc.node(*pid).is_some_and(|n| n.extras().shaper.is_some()) {
+                        continue;
                     }
-                } else {
-                    nav_exit = true;
+                    target = Some(*pid);
+                    break;
+                }
+                match target {
+                    // The root layer is the outermost crumb: isolating it is
+                    // leaving isolation, so exit instead.
+                    Some(pid) if Some(pid) != crumbs.first().and_then(|(oid, _, _)| *oid) => {
+                        nav_isolate = Some(pid)
+                    }
+                    _ => nav_exit = true,
                 }
             }
         }
